@@ -7,7 +7,9 @@ namespace DiggPHP\Psr11;
 use OutOfBoundsException;
 use Psr\Container\ContainerInterface;
 use ReflectionClass;
+use ReflectionFunction;
 use ReflectionFunctionAbstract;
+use ReflectionMethod;
 use ReflectionParameter;
 
 class Container implements ContainerInterface
@@ -15,7 +17,6 @@ class Container implements ContainerInterface
     private $item_list = [];
     private $item_cache_list = [];
     private $no_share_list = [];
-    private $callback_list = [];
 
     public function has(string $id): bool
     {
@@ -38,30 +39,31 @@ class Container implements ContainerInterface
             }
         }
         if (array_key_exists($id, $this->item_list)) {
-            $result = call_user_func($this->item_list[$id], $this);
-            if (isset($this->callback_list[$id])) {
-                foreach ($this->callback_list[$id] as $callback) {
-                    call_user_func($callback, $result);
-                }
+
+            if (is_array($this->item_list[$id])) {
+                $args = $this->reflectArguments(new ReflectionMethod(...$this->item_list[$id]));
+            } elseif (is_object($this->item_list[$id])) {
+                $args = $this->reflectArguments(new ReflectionMethod($this->item_list[$id], '__invoke'));
+            } elseif (is_string($this->item_list[$id]) && strpos($this->item_list[$id], '::')) {
+                $args = $this->reflectArguments(new ReflectionMethod($this->item_list[$id]));
+            } else {
+                $args = $this->reflectArguments(new ReflectionFunction($this->item_list[$id]));
             }
+
+            $obj = call_user_func($this->item_list[$id], ...$args);
             if (!in_array($id, $this->no_share_list)) {
-                $this->item_cache_list[$id] = $result;
+                $this->item_cache_list[$id] = $obj;
             }
-            return $result;
+            return $obj;
         }
         if ($reflector = $this->getReflectionClass($id)) {
             if ($reflector->isInstantiable()) {
                 $construct = $reflector->getConstructor();
-                $result = $reflector->newInstanceArgs($construct === null ? [] : $this->reflectArguments($construct));
-                if (isset($this->callback_list[$id])) {
-                    foreach ($this->callback_list[$id] as $callback) {
-                        call_user_func($callback, $result);
-                    }
-                }
+                $obj = $reflector->newInstanceArgs($construct === null ? [] : $this->reflectArguments($construct));
                 if (!in_array($id, $this->no_share_list)) {
-                    $this->item_cache_list[$id] = $result;
+                    $this->item_cache_list[$id] = $obj;
                 }
-                return $result;
+                return $obj;
             }
         }
         throw new NotFoundException(
@@ -86,14 +88,6 @@ class Container implements ContainerInterface
             $this->no_share_list[] = $id;
         }
         return $this;
-    }
-
-    public function onInstance(string $id, callable $callback)
-    {
-        if (!isset($this->callback_list[$id])) {
-            $this->callback_list[$id] = [];
-        }
-        $this->callback_list[$id][] = $callback;
     }
 
     public function reflectArguments(ReflectionFunctionAbstract $method, array $args = []): array
